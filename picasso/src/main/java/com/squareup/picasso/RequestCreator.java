@@ -63,11 +63,11 @@ public class RequestCreator {
     this.data = new Request.Builder(null, 0);
   }
 
-  public int getMaxWidth() {
+  int getMaxWidth() {
     return maxWidth;
   }
 
-  public int getMaxHeight() {
+  int getMaxHeight() {
     return maxHeight;
   }
 
