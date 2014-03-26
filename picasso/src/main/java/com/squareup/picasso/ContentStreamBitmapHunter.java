@@ -53,7 +53,7 @@ class ContentStreamBitmapHunter extends BitmapHunter {
       } finally {
         Utils.closeQuietly(is);
       }
-      calculateInSampleSize(data.targetWidth, data.targetHeight, options);
+      calculateInSampleSize(data.targetWidth, data.targetHeight, options, data.config);
     }
     InputStream is = contentResolver.openInputStream(data.uri);
     try {

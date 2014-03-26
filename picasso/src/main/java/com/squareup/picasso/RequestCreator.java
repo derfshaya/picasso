@@ -46,6 +46,7 @@ public class RequestCreator {
   private int errorResId;
   private Drawable placeholderDrawable;
   private Drawable errorDrawable;
+  private Bitmap.Config config;
 
   private int maxWidth = -1;
   private int maxHeight = -1;
@@ -230,6 +231,15 @@ public class RequestCreator {
    */
   public RequestCreator skipMemoryCache() {
     skipMemoryCache = true;
+    return this;
+  }
+
+  /**
+   * Sets the Bitmap.Config to be used to decode this image.
+   */
+  public RequestCreator config(Bitmap.Config config) {
+    data.config(config);
+    this.config = config;
     return this;
   }
 
