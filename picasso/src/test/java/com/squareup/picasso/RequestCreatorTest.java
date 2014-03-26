@@ -20,8 +20,7 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.widget.ImageView;
-import java.io.IOException;
-import java.util.concurrent.CountDownLatch;
+import android.widget.RemoteViews;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -32,8 +31,13 @@ import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import java.io.IOException;
+import java.util.concurrent.CountDownLatch;
+
 import static com.squareup.picasso.Picasso.LoadedFrom.MEMORY;
 import static com.squareup.picasso.Picasso.RequestTransformer.IDENTITY;
+import static com.squareup.picasso.RemoteViewsAction.AppWidgetAction;
+import static com.squareup.picasso.RemoteViewsAction.NotificationAction;
 import static com.squareup.picasso.TestUtils.BITMAP_1;
 import static com.squareup.picasso.TestUtils.TRANSFORM_REQUEST_ANSWER;
 import static com.squareup.picasso.TestUtils.URI_1;
@@ -41,13 +45,23 @@ import static com.squareup.picasso.TestUtils.URI_KEY_1;
 import static com.squareup.picasso.TestUtils.mockCallback;
 import static com.squareup.picasso.TestUtils.mockFitImageViewTarget;
 import static com.squareup.picasso.TestUtils.mockImageViewTarget;
+import static com.squareup.picasso.TestUtils.mockNotification;
+import static com.squareup.picasso.TestUtils.mockRemoteViews;
 import static com.squareup.picasso.TestUtils.mockTarget;
 import static org.fest.assertions.api.Assertions.assertThat;
 import static org.fest.assertions.api.Assertions.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.verifyZeroInteractions;
+import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
 @RunWith(RobolectricTestRunner.class)
@@ -103,7 +117,7 @@ public class RequestCreatorTest {
 
   @Test public void fetchSubmitsFetchRequest() throws Exception {
     new RequestCreator(picasso, URI_1, 0).fetch();
-    verify(picasso).enqueueAndSubmit(actionCaptor.capture());
+    verify(picasso).submit(actionCaptor.capture());
     assertThat(actionCaptor.getValue()).isInstanceOf(FetchAction.class);
   }
 
@@ -137,8 +151,10 @@ public class RequestCreatorTest {
   @Test
   public void intoTargetWithNullUriAndResourceIdSkipsAndCancels() throws Exception {
     Target target = mockTarget();
-    new RequestCreator(picasso, null, 0).into(target);
+    Drawable placeHolderDrawable = mock(Drawable.class);
+    new RequestCreator(picasso, null, 0).placeholder(placeHolderDrawable).into(target);
     verify(picasso).cancelRequest(target);
+    verify(target).onPrepareLoad(placeHolderDrawable);
     verifyNoMoreInteractions(picasso);
   }
 
@@ -162,7 +178,9 @@ public class RequestCreatorTest {
   @Test
   public void intoTargetAndNotInCacheSubmitsTargetRequest() throws Exception {
     Target target = mockTarget();
-    new RequestCreator(picasso, URI_1, 0).into(target);
+    Drawable placeHolderDrawable = mock(Drawable.class);
+    new RequestCreator(picasso, URI_1, 0).placeholder(placeHolderDrawable).into(target);
+    verify(target).onPrepareLoad(placeHolderDrawable);
     verify(picasso).enqueueAndSubmit(actionCaptor.capture());
     assertThat(actionCaptor.getValue()).isInstanceOf(TargetAction.class);
   }
@@ -226,6 +244,42 @@ public class RequestCreatorTest {
   }
 
   @Test
+  public void cancelNotOnMainThreadCrashes() throws Exception {
+    doCallRealMethod().when(picasso).cancelRequest(any(Target.class));
+    final CountDownLatch latch = new CountDownLatch(1);
+    new Thread(new Runnable() {
+      @Override public void run() {
+        try {
+          new RequestCreator(picasso, null, 0).into(mockTarget());
+          fail("Should have thrown IllegalStateException");
+        } catch (IllegalStateException ignored) {
+        } finally {
+          latch.countDown();
+        }
+      }
+    }).start();
+    latch.await();
+  }
+
+  @Test
+  public void intoNotOnMainThreadCrashes() throws Exception {
+    doCallRealMethod().when(picasso).enqueueAndSubmit(any(Action.class));
+    final CountDownLatch latch = new CountDownLatch(1);
+    new Thread(new Runnable() {
+      @Override public void run() {
+        try {
+          new RequestCreator(picasso, URI_1, 0).into(mockImageViewTarget());
+          fail("Should have thrown IllegalStateException");
+        } catch (IllegalStateException ignored) {
+        } finally {
+          latch.countDown();
+        }
+      }
+    }).start();
+    latch.await();
+  }
+
+  @Test
   public void intoImageViewAndNotInCacheSubmitsImageViewRequest() throws Exception {
     ImageView target = mockImageViewTarget();
     new RequestCreator(picasso, URI_1, 0).into(target);
@@ -266,6 +320,114 @@ public class RequestCreatorTest {
       ImageView target = mockImageViewTarget();
       new RequestCreator(picasso, URI_1, 0).fit().resize(10, 10).into(target);
       fail("Calling into() ImageView with fit() and resize() should throw exception");
+    } catch (IllegalStateException expected) {
+    }
+  }
+
+  @Test public void intoRemoteViewsWidgetQueuesAppWidgetAction() throws Exception {
+    new RequestCreator(picasso, URI_1, 0).into(mockRemoteViews(), 0, new int[] { 1, 2, 3 });
+    verify(picasso).enqueueAndSubmit(actionCaptor.capture());
+    assertThat(actionCaptor.getValue()).isInstanceOf(AppWidgetAction.class);
+  }
+
+  @Test public void intoRemoteViewsNotificationQueuesNotificationAction() throws Exception {
+    new RequestCreator(picasso, URI_1, 0).into(mockRemoteViews(), 0, 0, mockNotification());
+    verify(picasso).enqueueAndSubmit(actionCaptor.capture());
+    assertThat(actionCaptor.getValue()).isInstanceOf(NotificationAction.class);
+  }
+
+  @Test
+  public void intoRemoteViewsNotificationWithNullRemoteViewsThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).into(null, 0, 0, mockNotification());
+      fail("Calling into() with null RemoteViews should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsWidgetWithPlaceholderDrawableThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).placeholder(new ColorDrawable(0))
+          .into(mockRemoteViews(), 0, new int[] { 1, 2, 3 });
+      fail("Calling into() with placeholder drawable should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsWidgetWithErrorDrawableThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).error(new ColorDrawable(0))
+          .into(mockRemoteViews(), 0, new int[] { 1, 2, 3 });
+      fail("Calling into() with error drawable should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsNotificationWithPlaceholderDrawableThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).placeholder(new ColorDrawable(0))
+          .into(mockRemoteViews(), 0, 0, mockNotification());
+      fail("Calling into() with error drawable should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsNotificationWithErrorDrawableThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).error(new ColorDrawable(0))
+          .into(mockRemoteViews(), 0, 0, mockNotification());
+      fail("Calling into() with error drawable should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsWidgetWithNullRemoteViewsThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).into(null, 0, new int[] { 1, 2, 3 });
+      fail("Calling into() with null RemoteViews should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsWidgetWithNullAppWidgetIdsThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).into(mockRemoteViews(), 0, null);
+      fail("Calling into() with null appWidgetIds should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsNotificationWithNullNotificationThrows() throws Exception {
+    try {
+      new RequestCreator(picasso, URI_1, 0).into(mockRemoteViews(), 0, 0, null);
+      fail("Calling into() with null Notification should throw exception");
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsWidgetWithFitThrows() throws Exception {
+    try {
+      RemoteViews remoteViews = mockRemoteViews();
+      new RequestCreator(picasso, URI_1, 0).fit().into(remoteViews, 1, new int[] { 1, 2, 3 });
+      fail("Calling fit() into remote views should throw exception");
+    } catch (IllegalStateException expected) {
+    }
+  }
+
+  @Test
+  public void intoRemoteViewsNotificationWithFitThrows() throws Exception {
+    try {
+      RemoteViews remoteViews = mockRemoteViews();
+      new RequestCreator(picasso, URI_1, 0).fit().into(remoteViews, 1, 1, mockNotification());
+      fail("Calling fit() into remote views should throw exception");
     } catch (IllegalStateException expected) {
     }
   }

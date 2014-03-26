@@ -62,6 +62,8 @@ public final class Request {
   public final float rotationPivotY;
   /** Whether or not {@link #rotationPivotX} and {@link #rotationPivotY} are set. */
   public final boolean hasRotationPivot;
+  /** Target image config for decoding. */
+  public final Bitmap.Config config;
 
   public final Bitmap.Config config;
 
@@ -157,6 +159,7 @@ public final class Request {
       if (request.transformations != null) {
         transformations = new ArrayList<Transformation>(request.transformations);
       }
+      config = request.config;
     }
 
     boolean hasImage() {
@@ -278,9 +281,15 @@ public final class Request {
       return this;
     }
 
+    /** Decode the image using the specified config. */
+    public Builder config(Bitmap.Config config) {
+      this.config = config;
+      return this;
+    }
+
     /**
      * Add a custom transformation to be applied to the image.
-     * <p/>
+     * <p>
      * Custom transformations will always be run after the built-in transformations.
      */
     public Builder transform(Transformation transformation) {

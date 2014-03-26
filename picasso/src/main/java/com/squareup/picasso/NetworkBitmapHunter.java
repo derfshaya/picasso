@@ -27,7 +27,7 @@ import static com.squareup.picasso.Picasso.LoadedFrom.NETWORK;
 
 class NetworkBitmapHunter extends BitmapHunter {
   static final int DEFAULT_RETRY_COUNT = 2;
-  private static final int MARKER = 16384;
+  private static final int MARKER = 65536;
 
   private final Downloader downloader;
 
@@ -56,6 +56,12 @@ class NetworkBitmapHunter extends BitmapHunter {
     }
 
     InputStream is = response.getInputStream();
+    if (is == null) {
+      return null;
+    }
+    if (loadedFrom == NETWORK && response.getContentLength() > 0) {
+      stats.dispatchDownloadFinished(response.getContentLength());
+    }
     try {
       return decodeStream(is, data);
     } finally {
@@ -73,23 +79,33 @@ class NetworkBitmapHunter extends BitmapHunter {
   }
 
   private Bitmap decodeStream(InputStream stream, Request data) throws IOException {
-    if (stream == null) {
-      return null;
+    MarkableInputStream markStream = new MarkableInputStream(stream);
+    stream = markStream;
+
+    long mark = markStream.savePosition(MARKER);
+
+    final BitmapFactory.Options options = createBitmapOptions(data);
+    final boolean calculateSize = requiresInSampleSize(options);
+
+    boolean isWebPFile = Utils.isWebPFile(stream);
+    markStream.reset(mark);
+    // When decode WebP network stream, BitmapFactory throw JNI Exception and make app crash.
+    // Decode byte array instead
+    if (isWebPFile) {
+      byte[] bytes = Utils.toByteArray(stream);
+      if (calculateSize) {
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+        calculateInSampleSize(data.targetWidth, data.targetHeight, options, data.config);
+      }
+      return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+    } else {
+      if (calculateSize) {
+        BitmapFactory.decodeStream(stream, null, options);
+        calculateInSampleSize(data.targetWidth, data.targetHeight, options, data.config);
+
+        markStream.reset(mark);
+      }
+      return BitmapFactory.decodeStream(stream, null, options);
     }
-    BitmapFactory.Options options = null;
-    if (data.hasSize()) {
-      options = new BitmapFactory.Options();
-      options.inJustDecodeBounds = true;
-
-      MarkableInputStream markStream = new MarkableInputStream(stream);
-      stream = markStream;
-
-      long mark = markStream.savePosition(MARKER);
-      BitmapFactory.decodeStream(stream, null, options);
-      calculateInSampleSize(data.targetWidth, data.targetHeight, options, data.config);
-
-      markStream.reset(mark);
-    }
-    return BitmapFactory.decodeStream(stream, null, options);
   }
 }
