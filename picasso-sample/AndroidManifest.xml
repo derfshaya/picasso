@@ -5,7 +5,7 @@
     android:versionName="1.0.0"
     package="com.example.picasso">
 
-  <uses-sdk android:minSdkVersion="7" android:targetSdkVersion="18"/>
+  <uses-sdk android:minSdkVersion="7" android:targetSdkVersion="19"/>
 
   <!-- This is required for Picasso to work. -->
   <uses-permission android:name="android.permission.INTERNET"/>
@@ -21,6 +21,7 @@
 
   <application
       android:label="@string/app_name"
+      android:icon="@drawable/icon"
       android:theme="@style/Theme.PicassoSample">
 
     <activity
@@ -36,6 +37,14 @@
     <activity android:name=".SampleContactsActivity"/>
     <activity android:name=".SampleGalleryActivity"/>
     <activity android:name=".SampleListDetailActivity"/>
+
+    <receiver android:name="SampleWidgetProvider">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider"
+          android:resource="@xml/sample_widget_info"/>
+    </receiver>
 
   </application>
 </manifest>

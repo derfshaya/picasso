@@ -21,7 +21,10 @@ import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.net.NetworkInfo;
 import android.net.Uri;
+import android.provider.MediaStore;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Future;
@@ -30,6 +33,7 @@ import static android.content.ContentResolver.SCHEME_ANDROID_RESOURCE;
 import static android.content.ContentResolver.SCHEME_CONTENT;
 import static android.content.ContentResolver.SCHEME_FILE;
 import static android.provider.ContactsContract.Contacts;
+import static com.squareup.picasso.AssetBitmapHunter.ANDROID_ASSET;
 import static com.squareup.picasso.Picasso.LoadedFrom.MEMORY;
 
 abstract class BitmapHunter implements Runnable {
@@ -40,9 +44,12 @@ abstract class BitmapHunter implements Runnable {
    * well as potential OOMs. Shamelessly stolen from Volley.
    */
   private static final Object DECODE_LOCK = new Object();
-  private static final String ANDROID_ASSET = "android_asset";
-  protected static final int ASSET_PREFIX_LENGTH =
-      (SCHEME_FILE + ":///" + ANDROID_ASSET + "/").length();
+
+  private static final ThreadLocal<StringBuilder> NAME_BUILDER = new ThreadLocal<StringBuilder>() {
+    @Override protected StringBuilder initialValue() {
+      return new StringBuilder(Utils.THREAD_PREFIX);
+    }
+  };
 
   final Picasso picasso;
   final Dispatcher dispatcher;
@@ -50,9 +57,10 @@ abstract class BitmapHunter implements Runnable {
   final Stats stats;
   final String key;
   final Request data;
-  final List<Action> actions;
   final boolean skipMemoryCache;
 
+  Action action;
+  List<Action> actions;
   Bitmap result;
   Future<?> future;
   Picasso.LoadedFrom loadedFrom;
@@ -67,8 +75,7 @@ abstract class BitmapHunter implements Runnable {
     this.key = action.getKey();
     this.data = action.getData();
     this.skipMemoryCache = action.skipCache;
-    this.actions = new ArrayList<Action>(4);
-    attach(action);
+    this.action = action;
   }
 
   protected void setExifRotation(int exifRotation) {
@@ -77,7 +84,7 @@ abstract class BitmapHunter implements Runnable {
 
   @Override public void run() {
     try {
-      Thread.currentThread().setName(Utils.THREAD_PREFIX + data.getName());
+      updateThreadName(data);
 
       result = hunt();
 
@@ -86,9 +93,20 @@ abstract class BitmapHunter implements Runnable {
       } else {
         dispatcher.dispatchComplete(this);
       }
+    } catch (Downloader.ResponseException e) {
+      exception = e;
+      dispatcher.dispatchFailed(this);
     } catch (IOException e) {
       exception = e;
       dispatcher.dispatchRetry(this);
+    } catch (OutOfMemoryError e) {
+      StringWriter writer = new StringWriter();
+      stats.createSnapshot().dump(new PrintWriter(writer));
+      exception = new RuntimeException(writer.toString(), e);
+      dispatcher.dispatchFailed(this);
+    } catch (Exception e) {
+      exception = e;
+      dispatcher.dispatchFailed(this);
     } finally {
       Thread.currentThread().setName(Utils.THREAD_IDLE_NAME);
     }
@@ -112,7 +130,7 @@ abstract class BitmapHunter implements Runnable {
 
     if (bitmap != null) {
       stats.dispatchBitmapDecoded(bitmap);
-      if (data.needsTransformation()) {
+      if (data.needsTransformation() || exifRotation != 0) {
         synchronized (DECODE_LOCK) {
           if (data.needsMatrixTransform() || exifRotation != 0) {
             bitmap = transformResult(data, bitmap, exifRotation);
@@ -121,7 +139,9 @@ abstract class BitmapHunter implements Runnable {
             bitmap = applyCustomTransformations(data.transformations, bitmap);
           }
         }
-        stats.dispatchBitmapTransformed(bitmap);
+        if (bitmap != null) {
+          stats.dispatchBitmapTransformed(bitmap);
+        }
       }
     }
 
@@ -129,15 +149,29 @@ abstract class BitmapHunter implements Runnable {
   }
 
   void attach(Action action) {
+    if (this.action == null) {
+      this.action = action;
+      return;
+    }
+    if (actions == null) {
+      actions = new ArrayList<Action>(3);
+    }
     actions.add(action);
   }
 
   void detach(Action action) {
-    actions.remove(action);
+    if (this.action == action) {
+      this.action = null;
+    } else if (actions != null) {
+      actions.remove(action);
+    }
   }
 
   boolean cancel() {
-    return actions.isEmpty() && future != null && future.cancel(false);
+    return action == null
+        && (actions == null || actions.isEmpty())
+        && future != null
+        && future.cancel(false);
   }
 
   boolean isCancelled() {
@@ -164,6 +198,10 @@ abstract class BitmapHunter implements Runnable {
     return data;
   }
 
+  Action getAction() {
+    return action;
+  }
+
   List<Action> getActions() {
     return actions;
   }
@@ -174,6 +212,16 @@ abstract class BitmapHunter implements Runnable {
 
   Picasso.LoadedFrom getLoadedFrom() {
     return loadedFrom;
+  }
+
+  static void updateThreadName(Request data) {
+    String name = data.getName();
+
+    StringBuilder builder = NAME_BUILDER.get();
+    builder.ensureCapacity(Utils.THREAD_PREFIX.length() + name.length());
+    builder.replace(Utils.THREAD_PREFIX.length(), builder.length(), name);
+
+    Thread.currentThread().setName(builder.toString());
   }
 
   static BitmapHunter forRequest(Context context, Picasso picasso, Dispatcher dispatcher,
@@ -187,11 +235,13 @@ abstract class BitmapHunter implements Runnable {
       if (Contacts.CONTENT_URI.getHost().equals(uri.getHost()) //
           && !uri.getPathSegments().contains(Contacts.Photo.CONTENT_DIRECTORY)) {
         return new ContactsPhotoBitmapHunter(context, picasso, dispatcher, cache, stats, action);
+      } else if (MediaStore.AUTHORITY.equals(uri.getAuthority())) {
+        return new MediaStoreBitmapHunter(context, picasso, dispatcher, cache, stats, action);
       } else {
-        return new ContentProviderBitmapHunter(context, picasso, dispatcher, cache, stats, action);
+        return new ContentStreamBitmapHunter(context, picasso, dispatcher, cache, stats, action);
       }
     } else if (SCHEME_FILE.equals(scheme)) {
-      if (ANDROID_ASSET.equals(uri.getPathSegments().get(0))) {
+      if (!uri.getPathSegments().isEmpty() && ANDROID_ASSET.equals(uri.getPathSegments().get(0))) {
         return new AssetBitmapHunter(context, picasso, dispatcher, cache, stats, action);
       }
       return new FileBitmapHunter(context, picasso, dispatcher, cache, stats, action);
@@ -202,27 +252,51 @@ abstract class BitmapHunter implements Runnable {
     }
   }
 
+  /**
+   * Lazily create {@link android.graphics.BitmapFactory.Options} based in given
+   * {@link com.squareup.picasso.Request}, only instantiating them if needed.
+   */
+  static BitmapFactory.Options createBitmapOptions(Request data) {
+    final boolean justBounds = data.hasSize();
+    final boolean hasConfig = data.config != null;
+    BitmapFactory.Options options = null;
+    if (justBounds || hasConfig) {
+      options = new BitmapFactory.Options();
+      options.inJustDecodeBounds = justBounds;
+      if (hasConfig) {
+        options.inPreferredConfig = data.config;
+      }
+    }
+    return options;
+  }
+
+  static boolean requiresInSampleSize(BitmapFactory.Options options) {
+    return options != null && options.inJustDecodeBounds;
+  }
+
   static void calculateInSampleSize(int reqWidth, int reqHeight, BitmapFactory.Options options) {
-    final int height = options.outHeight;
-    final int width = options.outWidth;
+    calculateInSampleSize(reqWidth, reqHeight, options.outWidth, options.outHeight, options);
+  }
+
+  static void calculateInSampleSize(int reqWidth, int reqHeight, int width, int height,
+      BitmapFactory.Options options) {
     int sampleSize = 1;
     if (height > reqHeight || width > reqWidth) {
       final int heightRatio = Math.round((float) height / (float) reqHeight);
       final int widthRatio = Math.round((float) width / (float) reqWidth);
       sampleSize = heightRatio < widthRatio ? heightRatio : widthRatio;
     }
-
     options.inSampleSize = sampleSize;
     options.inJustDecodeBounds = false;
   }
 
   static Bitmap applyCustomTransformations(List<Transformation> transformations, Bitmap result) {
     for (int i = 0, count = transformations.size(); i < count; i++) {
-      Transformation transformation = transformations.get(i);
+      final Transformation transformation = transformations.get(i);
       Bitmap newResult = transformation.transform(result);
 
       if (newResult == null) {
-        StringBuilder builder = new StringBuilder() //
+        final StringBuilder builder = new StringBuilder() //
             .append("Transformation ")
             .append(transformation.key())
             .append(" returned null after ")
@@ -231,28 +305,46 @@ abstract class BitmapHunter implements Runnable {
         for (Transformation t : transformations) {
           builder.append(t.key()).append('\n');
         }
-        throw new NullPointerException(builder.toString());
+        Picasso.HANDLER.post(new Runnable() {
+          @Override public void run() {
+            throw new NullPointerException(builder.toString());
+          }
+        });
+        return null;
       }
 
       if (newResult == result && result.isRecycled()) {
-        throw new IllegalStateException(
-            "Transformation " + transformation.key() + " returned input Bitmap but recycled it.");
+        Picasso.HANDLER.post(new Runnable() {
+          @Override public void run() {
+            throw new IllegalStateException("Transformation "
+                + transformation.key()
+                + " returned input Bitmap but recycled it.");
+          }
+        });
+        return null;
       }
 
       // If the transformation returned a new bitmap ensure they recycled the original.
       if (newResult != result && !result.isRecycled()) {
-        throw new IllegalStateException("Transformation "
-            + transformation.key()
-            + " mutated input Bitmap but failed to recycle the original.");
+        Picasso.HANDLER.post(new Runnable() {
+          @Override public void run() {
+            throw new IllegalStateException("Transformation "
+                + transformation.key()
+                + " mutated input Bitmap but failed to recycle the original.");
+          }
+        });
+        return null;
       }
+
       result = newResult;
     }
     return result;
   }
 
   static Bitmap transformResult(Request data, Bitmap result, int exifRotation) {
-    int inWidth = result.getWidth();
-    int inHeight = result.getHeight();
+    boolean swapDimens = exifRotation == 90 || exifRotation == 270;
+    int inWidth = swapDimens ? result.getHeight() : result.getWidth();
+    int inHeight = swapDimens ? result.getWidth() : result.getHeight();
 
     int drawX = 0;
     int drawY = 0;

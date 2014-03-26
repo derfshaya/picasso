@@ -66,7 +66,7 @@
 
   Picasso.with(context).load(url).into(view);
 }</pre>
-  
+
             <h4>Image Transformations</h4>
             <p>Transform images to better fit into layouts and to reduce memory size.</p>
             <pre class="prettyprint">Picasso.with(context)
@@ -104,10 +104,10 @@
             <h4>Resource Loading</h4>
             <p>Resources, assets, files, content providers are all supported as image sources.</p>
             <pre class="prettyprint">Picasso.with(context).load(R.drawable.landing_screen).into(imageView1);
-Picasso.with(context).load(new File("/images/oprah_bees.gif")).into(imageView2);</pre>
+Picasso.with(context).load(new File(...)).into(imageView2);</pre>
 
             <h4>Debug Indicators</h4>
-            <p>For development you can enable the display of a colored ribbon which indicates the image source. Call <code>debugging(true)</code> on the Picasso instance.</p>
+            <p>For development you can enable the display of a colored ribbon which indicates the image source. Call <code>setDebugging(true)</code> on the Picasso instance.</p>
             <p class="screenshot"><img src="static/debug.png" alt="Debug ribbon indicators"></p>
 
             <h3 id="download">Download</h3>
@@ -152,7 +152,7 @@ limitations under the License.</pre>
               </ul>
               <ul class="nav nav-pills nav-stacked secondary">
                 <li><a href="javadoc/index.html">Javadoc</a></li>
-                <li><a href="https://plus.google.com/communities/109244258569782858265/stream/885843f4-c8b5-4851-9de1-b0374121dfa3">Google+ Community</a></li>
+                <li><a href="http://stackoverflow.com/questions/tagged/picasso?sort=active">StackOverflow</a></li>
               </ul>
             </div>
           </div>
@@ -176,7 +176,7 @@ limitations under the License.</pre>
 
         // Spy on scroll position for real-time updating of current section.
         $('body').scrollspy();
-        
+
         // Use smooth-scroll for internal links.
         $('a').smoothScroll();
 

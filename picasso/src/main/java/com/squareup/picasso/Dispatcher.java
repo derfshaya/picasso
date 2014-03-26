@@ -22,11 +22,11 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Message;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +38,7 @@ import static android.content.Intent.ACTION_AIRPLANE_MODE_CHANGED;
 import static android.net.ConnectivityManager.CONNECTIVITY_ACTION;
 import static android.os.Process.THREAD_PRIORITY_BACKGROUND;
 import static com.squareup.picasso.BitmapHunter.forRequest;
+import static com.squareup.picasso.Utils.getService;
 
 class Dispatcher {
   private static final int RETRY_DELAY = 500;
@@ -68,6 +69,7 @@ class Dispatcher {
   final Cache cache;
   final Stats stats;
   final List<BitmapHunter> batch;
+  final NetworkBroadcastReceiver receiver;
 
   NetworkInfo networkInfo;
   boolean airplaneMode;
@@ -79,20 +81,21 @@ class Dispatcher {
     this.context = context;
     this.service = service;
     this.hunterMap = new LinkedHashMap<String, BitmapHunter>();
-    this.handler = new DispatcherHandler(dispatcherThread.getLooper());
+    this.handler = new DispatcherHandler(dispatcherThread.getLooper(), this);
     this.downloader = downloader;
     this.mainThreadHandler = mainThreadHandler;
     this.cache = cache;
     this.stats = stats;
     this.batch = new ArrayList<BitmapHunter>(4);
     this.airplaneMode = Utils.isAirplaneModeOn(this.context);
-    NetworkBroadcastReceiver receiver = new NetworkBroadcastReceiver(this.context);
+    this.receiver = new NetworkBroadcastReceiver(this);
     receiver.register();
   }
 
   void shutdown() {
     service.shutdown();
     dispatcherThread.quit();
+    receiver.unregister();
   }
 
   void dispatchSubmit(Action action) {
@@ -206,53 +209,60 @@ class Dispatcher {
     }
   }
 
-  private class DispatcherHandler extends Handler {
-    public DispatcherHandler(Looper looper) {
+  private static class DispatcherHandler extends Handler {
+    private final Dispatcher dispatcher;
+
+    public DispatcherHandler(Looper looper, Dispatcher dispatcher) {
       super(looper);
+      this.dispatcher = dispatcher;
     }
 
-    @Override public void handleMessage(Message msg) {
+    @Override public void handleMessage(final Message msg) {
       switch (msg.what) {
         case REQUEST_SUBMIT: {
           Action action = (Action) msg.obj;
-          performSubmit(action);
+          dispatcher.performSubmit(action);
           break;
         }
         case REQUEST_CANCEL: {
           Action action = (Action) msg.obj;
-          performCancel(action);
+          dispatcher.performCancel(action);
           break;
         }
         case HUNTER_COMPLETE: {
           BitmapHunter hunter = (BitmapHunter) msg.obj;
-          performComplete(hunter);
+          dispatcher.performComplete(hunter);
           break;
         }
         case HUNTER_RETRY: {
           BitmapHunter hunter = (BitmapHunter) msg.obj;
-          performRetry(hunter);
+          dispatcher.performRetry(hunter);
           break;
         }
         case HUNTER_DECODE_FAILED: {
           BitmapHunter hunter = (BitmapHunter) msg.obj;
-          performError(hunter);
+          dispatcher.performError(hunter);
           break;
         }
         case HUNTER_DELAY_NEXT_BATCH: {
-          performBatchComplete();
+          dispatcher.performBatchComplete();
           break;
         }
         case NETWORK_STATE_CHANGE: {
           NetworkInfo info = (NetworkInfo) msg.obj;
-          performNetworkStateChange(info);
+          dispatcher.performNetworkStateChange(info);
           break;
         }
         case AIRPLANE_MODE_CHANGE: {
-          performAirplaneModeChange(msg.arg1 == AIRPLANE_MODE_ON);
+          dispatcher.performAirplaneModeChange(msg.arg1 == AIRPLANE_MODE_ON);
           break;
         }
         default:
-          throw new AssertionError("Unknown handler message received: " + msg.what);
+          Picasso.HANDLER.post(new Runnable() {
+            @Override public void run() {
+              throw new AssertionError("Unknown handler message received: " + msg.what);
+            }
+          });
       }
     }
   }
@@ -263,34 +273,45 @@ class Dispatcher {
     }
   }
 
-  private class NetworkBroadcastReceiver extends BroadcastReceiver {
-    private static final String EXTRA_AIRPLANE_STATE = "state";
+  static class NetworkBroadcastReceiver extends BroadcastReceiver {
+    static final String EXTRA_AIRPLANE_STATE = "state";
 
-    private final ConnectivityManager connectivityManager;
+    private final Dispatcher dispatcher;
 
-    NetworkBroadcastReceiver(Context context) {
-      connectivityManager = (ConnectivityManager) context.getSystemService(CONNECTIVITY_SERVICE);
+    NetworkBroadcastReceiver(Dispatcher dispatcher) {
+      this.dispatcher = dispatcher;
     }
 
     void register() {
-      boolean shouldScanState = service instanceof PicassoExecutorService && //
-          Utils.hasPermission(context, Manifest.permission.ACCESS_NETWORK_STATE);
+      boolean shouldScanState = dispatcher.service instanceof PicassoExecutorService && //
+          Utils.hasPermission(dispatcher.context, Manifest.permission.ACCESS_NETWORK_STATE);
       IntentFilter filter = new IntentFilter();
       filter.addAction(ACTION_AIRPLANE_MODE_CHANGED);
       if (shouldScanState) {
         filter.addAction(CONNECTIVITY_ACTION);
       }
-      context.registerReceiver(this, filter);
+      dispatcher.context.registerReceiver(this, filter);
+    }
+
+    void unregister() {
+      dispatcher.context.unregisterReceiver(this);
     }
 
     @Override public void onReceive(Context context, Intent intent) {
-      String action = intent.getAction();
-      Bundle extras = intent.getExtras();
-
+      // On some versions of Android this may be called with a null Intent,
+      // also without extras (getExtras() == null), in such case we use defaults.
+      if (intent == null) {
+        return;
+      }
+      final String action = intent.getAction();
       if (ACTION_AIRPLANE_MODE_CHANGED.equals(action)) {
-        dispatchAirplaneModeChange(extras.getBoolean(EXTRA_AIRPLANE_STATE, false));
+        if (!intent.hasExtra(EXTRA_AIRPLANE_STATE)) {
+          return; // No airplane state, ignore it. Should we query Utils.isAirplaneModeOn?
+        }
+        dispatcher.dispatchAirplaneModeChange(intent.getBooleanExtra(EXTRA_AIRPLANE_STATE, false));
       } else if (CONNECTIVITY_ACTION.equals(action)) {
-        dispatchNetworkStateChange(connectivityManager.getActiveNetworkInfo());
+        ConnectivityManager connectivityManager = getService(context, CONNECTIVITY_SERVICE);
+        dispatcher.dispatchNetworkStateChange(connectivityManager.getActiveNetworkInfo());
       }
     }
   }
