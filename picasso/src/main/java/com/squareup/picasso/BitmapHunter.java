@@ -278,8 +278,10 @@ abstract class BitmapHunter implements Runnable {
     calculateInSampleSize(reqWidth, reqHeight, options, null);
   }
 
-  static void calculateInSampleSize(int reqWidth, int reqHeight, BitmapFactory.Options options, Bitmap.Config config) {
-    calculateInSampleSize(reqWidth, reqHeight, options.outWidth, options.outHeight, options, config);
+  static void calculateInSampleSize(int reqWidth, int reqHeight, BitmapFactory.Options options,
+      Bitmap.Config config) {
+    calculateInSampleSize(reqWidth, reqHeight, options.outWidth, options.outHeight,
+      options, config);
   }
 
   static void calculateInSampleSize(int reqWidth, int reqHeight, int width, int height,
