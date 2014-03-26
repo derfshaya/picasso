@@ -107,7 +107,9 @@ public class DeferredRequestCreatorTest {
     DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
     request.onPreDraw();
     verify(target.getViewTreeObserver(), never()).removeOnPreDrawListener(request);
-    verifyZeroInteractions(creator);
+    verify(creator).getMaxWidth();
+    verify(creator).getMaxHeight();
+    verifyNoMoreInteractions(creator);
   }
 
   @Test public void cancelSkipsWithNullTarget() throws Exception {
