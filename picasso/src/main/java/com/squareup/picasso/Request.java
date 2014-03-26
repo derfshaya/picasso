@@ -65,8 +65,6 @@ public final class Request {
   /** Target image config for decoding. */
   public final Bitmap.Config config;
 
-  public final Bitmap.Config config;
-
   private Request(Uri uri, int resourceId, List<Transformation> transformations, int targetWidth,
       int targetHeight, boolean centerCrop, boolean centerInside, float rotationDegrees,
       float rotationPivotX, float rotationPivotY, boolean hasRotationPivot, Bitmap.Config config) {
@@ -300,11 +298,6 @@ public final class Request {
         transformations = new ArrayList<Transformation>(2);
       }
       transformations.add(transformation);
-      return this;
-    }
-
-    public Builder config(Bitmap.Config config) {
-      this.config = config;
       return this;
     }
 

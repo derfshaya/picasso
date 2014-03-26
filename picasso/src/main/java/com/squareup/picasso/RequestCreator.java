@@ -213,15 +213,6 @@ public class RequestCreator {
     return this;
   }
 
-  /**
-   * Sets the Bitmap.Config to be used to decode this image.
-   */
-  public RequestCreator config(Bitmap.Config config) {
-    data.config(config);
-    this.config = config;
-    return this;
-  }
-
   /** Disable brief fade in of images loaded from the disk cache or network. */
   public RequestCreator noFade() {
     noFade = true;
